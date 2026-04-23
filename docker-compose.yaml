@@ -1,0 +1,16 @@
+services:
+  gateway-server:
+    container_name: gateway-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/
+    networks:
+      - pgsg-network
+
+networks:
+  pgsg-network:
+    external: true
