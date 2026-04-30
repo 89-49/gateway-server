@@ -6,6 +6,11 @@ spring:
       - "optional:configserver:http://34.50.50.170:13100"
       - "optional:file:.env[.properties]"
   cloud:
+    gateway:
+      server:
+        webmvc:
+          default-filters:
+            - name: jwtGatewayFilter
     config:
       allow-override: true
       override-none: true
