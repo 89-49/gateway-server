@@ -1,24 +1,14 @@
-server:
-  port: 8090
-
 spring:
   application:
     name: gateway-server
+  config:
+    import:
+      - "optional:configserver:http://34.50.50.170:13100"
+      - "optional:file:.env[.properties]"
   cloud:
     config:
-      enabled: false
-    gateway:
-      server:
-        webmvc:
-          routes:
-            - id: trace-server
-              uri: lb://trace-server
-              predicates:
-                - Path=/api/v1/trace/**
-
-eureka:
-  client:
-    fetch-registry: true
-    register-with-eureka: true
-    service-url:
-      defaultZone: http://eureka-server:8761/eureka/
+      allow-override: true
+      override-none: true
+      override-system-properties: false
+      discovery:
+        service-id: config-server
