@@ -10,7 +10,7 @@ services:
     ports:
       - "8090:8090"
     env_file:
-      - .env
+      - .env.runtime
     environment:
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://eureka-server:8761/eureka/
     networks:

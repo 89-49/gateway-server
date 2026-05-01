@@ -43,7 +43,7 @@ public class JwtGatewayFilter implements HandlerFilterFunction<ServerResponse, S
 
             if (TokenType.ACCESS.matches(tokenType)) {
                 injectUserHeaders(builder, claims);
-                log.info("[JwtGatewayFilter] 토큰 검증 성공 - 사용자({}) 헤더 주입", claims.getSubject());
+                log.info("[JwtGatewayFilter] 토큰 검증 성공 - 사용자 헤더 주입");
             }
         } catch (JwtException | IllegalArgumentException e) {
             log.warn("[JwtGatewayFilter] 토큰 처리 오류: {}", e.getMessage());
