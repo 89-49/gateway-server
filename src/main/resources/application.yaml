@@ -17,3 +17,6 @@ spring:
       override-system-properties: false
       discovery:
         service-id: config-server
+
+server:
+  port: 8090
