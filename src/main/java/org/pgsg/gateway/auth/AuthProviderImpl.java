@@ -1,6 +1,7 @@
 package org.pgsg.gateway.auth;
 
 import lombok.RequiredArgsConstructor;
+import org.pgsg.common.response.CommonResponse;
 import org.pgsg.gateway.feign.AuthClient;
 import org.springframework.stereotype.Component;
 
@@ -15,7 +16,7 @@ public class AuthProviderImpl implements AuthProvider {
 
 	// 간단한 로컬 캐시 (토큰별 검증 결과 저장)
 	private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-	private static final long CACHE_TTL = 60 * 3000; // 캐시 유지 시간: 3분
+	private static final long CACHE_TTL = 30 * 1000; // 캐시 유지 시간: 3분
 
 	@Override
 	public boolean verifyToken(String accessToken) {
@@ -27,9 +28,9 @@ public class AuthProviderImpl implements AuthProvider {
 		}
 
 		// 캐시가 없거나 만료되었으면 Feign 호출
-		AuthDto.TokenVerifyResponse response = authClient.verifyToken(new AuthDto.TokenVerifyRequest(accessToken)).data();
+		CommonResponse<AuthDto.TokenVerifyData> response = authClient.verifyToken(new AuthDto.TokenVerifyRequest(accessToken));
 
-		// 결과 추출 (success 가 true 이고 isVerifiedToken 이 true 인 경우에만 성공) 및 캐싱
+		// 결과 추출 (success 가 true 이고 isVerifiedToken 이 true 인 경우에만 성공)
 		boolean result = response != null && response.success() && response.data() != null && response.data().isVerifiedToken();
 		cache.put(accessToken, new CacheEntry(result, System.currentTimeMillis() + CACHE_TTL));
 
