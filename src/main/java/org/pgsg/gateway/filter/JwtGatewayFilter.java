@@ -116,7 +116,7 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
                 : MDC.get("traceId");
 
         if (traceId == null) {
-            traceId = UUID.randomUUID().toString().substring(0, 8);
+            traceId = UUID.randomUUID().toString().replace("-", "");
         }
 
         // MDC와 헤더를 결정된 ID로 일치시킴

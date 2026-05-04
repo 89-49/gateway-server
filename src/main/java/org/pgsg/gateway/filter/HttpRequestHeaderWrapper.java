@@ -24,7 +24,7 @@ public class HttpRequestHeaderWrapper extends HttpServletRequestWrapper {
 	public void removeHeaders(String prefix) {
 		Collections.list(super.getHeaderNames()).stream()
 				.filter(name -> name.toLowerCase().startsWith(prefix.toLowerCase()))
-				.forEach(customHeaders::remove);
+				.forEach(name -> customHeaders.remove(name.toLowerCase()));
 	}
 
 	@Override

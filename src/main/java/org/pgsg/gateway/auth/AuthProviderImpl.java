@@ -12,11 +12,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class AuthProviderImpl implements AuthProvider {
 
-	private final AuthClient authClient;
+	private static final long CACHE_TTL = 30 * 1000;	// 캐시 유지 시간: 30초
+	private static final int MAX_CACHE_SIZE = 10000;
 
 	// 간단한 로컬 캐시 (토큰별 검증 결과 저장)
 	private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-	private static final long CACHE_TTL = 30 * 1000; // 캐시 유지 시간: 3분
+	private final AuthClient authClient;
 
 	@Override
 	public boolean verifyToken(String accessToken) {
@@ -32,6 +33,12 @@ public class AuthProviderImpl implements AuthProvider {
 
 		// 결과 추출 (success 가 true 이고 isVerifiedToken 이 true 인 경우에만 성공)
 		boolean result = response != null && response.success() && response.data() != null && response.data().isVerifiedToken();
+		if (cache.size() >= MAX_CACHE_SIZE) {
+			cleanupCache();
+			if (cache.size() >= MAX_CACHE_SIZE) {
+				cache.clear();
+			}
+		}
 		cache.put(accessToken, new CacheEntry(result, System.currentTimeMillis() + CACHE_TTL));
 
 		cleanupCache();
@@ -41,9 +48,7 @@ public class AuthProviderImpl implements AuthProvider {
 
 	// 만료된 캐시를 가끔 정리 (메모리 누수 방지)
 	private void cleanupCache() {
-		if (cache.size() > 500) { // 캐시 크기가 일정 이상 커지면 정리
-			cache.entrySet().removeIf(e -> e.getValue().isExpired());
-		}
+		cache.entrySet().removeIf(e -> e.getValue().isExpired());
 	}
 
 	private record CacheEntry(boolean result, long expiryTime) {
