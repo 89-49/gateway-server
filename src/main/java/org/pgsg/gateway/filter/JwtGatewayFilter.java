@@ -1,6 +1,5 @@
 package org.pgsg.gateway.filter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.micrometer.tracing.Tracer;
@@ -8,26 +7,24 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.pgsg.common.response.ErrorResponse;
+import org.pgsg.config.security.CustomAuthenticationEntryPoint;
 import org.pgsg.config.security.jwt.JwtUtils;
 import org.pgsg.config.security.token.TokenProvider;
 import org.pgsg.config.security.token.TokenType;
 import org.pgsg.gateway.auth.AuthProvider;
 import org.slf4j.MDC;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -36,7 +33,6 @@ import java.util.UUID;
 @Slf4j
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
-@RequiredArgsConstructor
 public class JwtGatewayFilter extends OncePerRequestFilter {
 
     private static final String HEADER_TRACE_ID = "X-Trace-Id";
@@ -45,7 +41,19 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
     private final Tracer tracer;
     private final TokenProvider jwtTokenProvider;
     private final AuthProvider authProvider;
-    private final ObjectMapper objectMapper;
+
+    private final CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
+
+    public JwtGatewayFilter(
+            Tracer tracer,
+            TokenProvider jwtTokenProvider,
+            AuthProvider authProvider,
+            @Lazy CustomAuthenticationEntryPoint customAuthenticationEntryPoint) {
+        this.tracer = tracer;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.authProvider = authProvider;
+        this.customAuthenticationEntryPoint = customAuthenticationEntryPoint;
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
@@ -65,10 +73,11 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 3. 블랙리스트 확인: 차단 시 즉시 종료
+        // 3. 블랙리스트 확인: 차단 시 즉시 종료 (AuthenticationEntryPoint 활용)
         if (!authProvider.verifyToken(accessToken)) {
             log.error("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
-            sendErrorResponse(response, traceId);
+            customAuthenticationEntryPoint.commence(request, response,
+                    new InsufficientAuthenticationException("이미 로그아웃되었거나 유효하지 않은 토큰입니다."));
             return;
         }
 
@@ -101,36 +110,21 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
      * 1. Tracer(Zipkin) -> 2. MDC(LoggingFilter) -> 3. UUID 순으로 ID 결정
      */
     private String initializeHeaders(HttpRequestHeaderWrapper mutableRequest, Tracer tracer) {
+        // traceId: Zipkin의 traceId 할당 후 MDC에 저장 -> Zipkin과의 연동을 위해 32글자 유지(필요 시 수정 예정)
         String traceId = (tracer.currentSpan() != null)
                 ? Objects.requireNonNull(tracer.currentSpan()).context().traceId()
                 : MDC.get("traceId");
+
         if (traceId == null) {
             traceId = UUID.randomUUID().toString().substring(0, 8);
         }
 
         // MDC와 헤더를 결정된 ID로 일치시킴
         MDC.put("traceId", traceId);
-        mutableRequest.putHeader(HEADER_TRACE_ID, traceId);
         mutableRequest.removeHeaders("x-user-");
+        mutableRequest.putHeader(HEADER_TRACE_ID, traceId);
         
         return traceId;
-    }
-
-    private void sendErrorResponse(HttpServletResponse response, String traceId) throws IOException {
-        ErrorResponse errorResponse = new ErrorResponse(
-                HttpStatus.UNAUTHORIZED.value(),
-                "AUTH001",
-                HttpStatus.UNAUTHORIZED.name(),
-                "이미 로그아웃되었거나 유효하지 않은 토큰입니다.",
-                null,
-                traceId,
-                LocalDateTime.now()
-        );
-
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
     }
 
     private void injectUserHeaders(HttpRequestHeaderWrapper request, Claims claims) {
