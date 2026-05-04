@@ -59,42 +59,36 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
 
         HttpRequestHeaderWrapper mutableRequest = new HttpRequestHeaderWrapper(request);
 
-        // 1. 스푸핑 방지 및 추적 ID 동기화
+        // 1. 추적 ID 동기화 및 보안 헤더 초기화
         String traceId = initializeHeaders(mutableRequest, tracer);
         
         log.info("[JwtGatewayFilter] 요청 수신: {} {}", request.getMethod(), request.getRequestURI());
         String accessToken = JwtUtils.resolveToken(request.getHeader(HttpHeaders.AUTHORIZATION));
         String path = request.getRequestURI();
 
-        // 2. 토큰이 없거나, 로그인/회원가입 진행 시: 즉시 통과 (Public API)
+        // 2. 토큰이 없거나, 화이트리스트 경로인 경우: 즉시 통과
         if (WHITELIST.contains(path) || accessToken == null) {
             filterChain.doFilter(mutableRequest, response);
             return;
         }
 
-        // 3. 블랙리스트 확인: 차단 시 즉시 종료
-        if (!authProvider.verifyToken(accessToken)) {
-            log.warn("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
-            customAuthenticationEntryPoint.commence(request, response,
-                    new InsufficientAuthenticationException("이미 로그아웃되었거나 유효하지 않은 토큰입니다."));
-            return;
-        }
-
-        // 4. 토큰 유효성 검증 및 헤더 주입 -> 실패 시 즉시 종료 (Fail-Fast)
-        if (!processAuthentication(mutableRequest, response, accessToken, traceId)) {
-            return;
+        // 3. 통합 인증 프로세스 수행 (로컬 검증 -> 원격 검증 -> 헤더 주입)
+        if (!authenticate(mutableRequest, response, accessToken, traceId)) {
+            return; // 검증 실패 시 응답 종료
         }
 
         filterChain.doFilter(mutableRequest, response);
     }
 
     /**
-     * 토큰의 유효성을 검증하고 사용자 헤더를 주입합니다.
-     * 실패 시 AuthenticationEntryPoint를 통해 응답을 종료합니다.
+     * 통합 인증 로직 (최적화된 순서)
+     * 1. 로컬 검증 (Signature, Expiration) - 비용 낮음
+     * 2. 원격 검증 (Blacklist 체크) - 비용 높음
+     * 3. Claims 파싱 및 헤더 주입
      */
-    private boolean processAuthentication(HttpRequestHeaderWrapper request, HttpServletResponse response, String accessToken, String traceId) throws IOException, ServletException {
+    private boolean authenticate(HttpRequestHeaderWrapper request, HttpServletResponse response, String accessToken, String traceId) throws IOException, ServletException {
         try {
-            // 로컬 검증 (위조/만료 여부)
+            // [Step 1] 로컬 검증 (가장 먼저 수행하여 잘못된 토큰의 원격 호출 방지)
             if (!jwtTokenProvider.validateToken(accessToken)) {
                 log.info("[JwtGatewayFilter] 유효하지 않은 토큰 - 차단 (TraceID: {})", traceId);
                 customAuthenticationEntryPoint.commence(request, response,
@@ -102,32 +96,38 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
                 return false;
             }
 
+            // [Step 2] 원격 검증 (로컬 검증 통과 시에만 실시간 블랙리스트 확인)
+            if (!authProvider.verifyToken(accessToken)) {
+                log.warn("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
+                customAuthenticationEntryPoint.commence(request, response,
+                        new InsufficientAuthenticationException("이미 로그아웃되었거나 사용할 수 없는 토큰입니다."));
+                return false;
+            }
+
+            // [Step 3] Claims 추출 및 토큰 타입 확인
             Claims claims = jwtTokenProvider.parseClaims(accessToken);
             String tokenType = claims.get(JwtUtils.CLAIM_TOKEN_TYPE, String.class);
 
-            // Access 토큰 타입 확인
-            if (TokenType.ACCESS.matches(tokenType)) {
-                injectUserHeaders(request, claims);
-                log.info("[JwtGatewayFilter] 토큰 검증 성공 - 사용자 헤더 주입 (TraceID: {})", traceId);
-                return true;
+            if (!TokenType.ACCESS.matches(tokenType)) {
+                log.warn("[JwtGatewayFilter] 허용되지 않은 토큰 타입 ({}) - 차단 (TraceID: {})", tokenType, traceId);
+                customAuthenticationEntryPoint.commence(request, response,
+                        new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
+                return false;
             }
 
-            log.warn("[JwtGatewayFilter] 허용되지 않은 토큰 타입 ({}) - 차단 (TraceID: {})", tokenType, traceId);
-            customAuthenticationEntryPoint.commence(request, response,
-                    new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
-            return false;
+            // [Step 4] 검증 완료 - 사용자 헤더 주입
+            injectUserHeaders(request, claims);
+            log.info("[JwtGatewayFilter] 인증 성공 - 사용자 헤더 주입 (TraceID: {})", traceId);
+            return true;
 
         } catch (JwtException | IllegalArgumentException e) {
-            log.error("[JwtGatewayFilter] 토큰 처리 중 예외 발생: {} (TraceID: {})", e.getMessage(), traceId);
+            log.error("[JwtGatewayFilter] 인증 처리 중 예외 발생: {} (TraceID: {})", e.getMessage(), traceId);
             customAuthenticationEntryPoint.commence(request, response,
-                    new InsufficientAuthenticationException("토큰 검증 중 오류가 발생했습니다."));
+                    new InsufficientAuthenticationException("토큰 인증 중 오류가 발생했습니다."));
             return false;
         }
     }
 
-    /**
-     * 추적 ID 동기화 및 보안 헤더 초기화
-     */
     private String initializeHeaders(HttpRequestHeaderWrapper mutableRequest, Tracer tracer) {
         String traceId = (tracer.currentSpan() != null)
                 ? Objects.requireNonNull(tracer.currentSpan()).context().traceId()
