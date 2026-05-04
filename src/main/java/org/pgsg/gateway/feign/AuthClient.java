@@ -10,5 +10,5 @@ import org.springframework.web.bind.annotation.RequestBody;
 public interface AuthClient {
 
 	@PostMapping(value = "/internal/v1/auth/verify")
-	CommonResponse<AuthDto.TokenVerifyResponse> verifyToken(@RequestBody AuthDto.TokenVerifyRequest request);
+	CommonResponse<AuthDto.TokenVerifyData> verifyToken(@RequestBody AuthDto.TokenVerifyRequest request);
 }
