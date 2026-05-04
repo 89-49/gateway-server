@@ -1,67 +1,136 @@
 package org.pgsg.gateway.filter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import io.micrometer.tracing.Tracer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.pgsg.common.response.ErrorResponse;
 import org.pgsg.config.security.jwt.JwtUtils;
 import org.pgsg.config.security.token.TokenProvider;
 import org.pgsg.config.security.token.TokenType;
+import org.pgsg.gateway.auth.AuthProvider;
+import org.slf4j.MDC;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 @RequiredArgsConstructor
 public class JwtGatewayFilter extends OncePerRequestFilter {
 
+    private static final String HEADER_TRACE_ID = "X-Trace-Id";
+    private static final List<String> WHITELIST = List.of("/api/v1/auth/login", "/api/v1/auth/signup");
+
+    private final Tracer tracer;
     private final TokenProvider jwtTokenProvider;
+    private final AuthProvider authProvider;
+    private final ObjectMapper objectMapper;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
 
         HttpRequestHeaderWrapper mutableRequest = new HttpRequestHeaderWrapper(request);
 
-        // 1. 스푸핑 방지 — x-user-* 헤더 제거
-        mutableRequest.removeHeaders("x-user-");
-
+        // 1. 스푸핑 방지 및 추적 ID 동기화
+        String traceId = initializeHeaders(mutableRequest, tracer);
+        
         log.info("[JwtGatewayFilter] 요청 수신: {} {}", request.getMethod(), request.getRequestURI());
-
         String accessToken = JwtUtils.resolveToken(request.getHeader(HttpHeaders.AUTHORIZATION));
+        String path = request.getRequestURI();
 
-        // 2. 토큰 검증 실패 시 mutableRequest(x-user-* 제거된 상태)로 다음 단계 진행
-        if (accessToken == null || !jwtTokenProvider.validateToken(accessToken)) {
-            log.info("[JwtGatewayFilter] 토큰 검증 실패 - 다음 단계 진행");
+        // 2. 토큰이 없거나, 로그인/회원가입 진행 시: 즉시 통과
+        if (WHITELIST.contains(path) || accessToken == null) {
             filterChain.doFilter(mutableRequest, response);
             return;
         }
 
+        // 3. 블랙리스트 확인: 차단 시 즉시 종료
+        if (!authProvider.verifyToken(accessToken)) {
+            log.error("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
+            sendErrorResponse(response, traceId);
+            return;
+        }
+
+        // 4. 토큰 유효성 검증 및 헤더 주입 -> 다음 단계 진행
+        processAuthentication(mutableRequest, accessToken);
+        filterChain.doFilter(mutableRequest, response);
+    }
+
+    private void processAuthentication(HttpRequestHeaderWrapper request, String accessToken) {
         try {
+            if (!jwtTokenProvider.validateToken(accessToken)) {
+                log.info("[JwtGatewayFilter] 유효하지 않은 토큰 - 헤더 주입 없이 진행");
+                return;
+            }
+
             Claims claims = jwtTokenProvider.parseClaims(accessToken);
             String tokenType = claims.get(JwtUtils.CLAIM_TOKEN_TYPE, String.class);
 
             if (TokenType.ACCESS.matches(tokenType)) {
-                injectUserHeaders(mutableRequest, claims);
+                injectUserHeaders(request, claims);
                 log.info("[JwtGatewayFilter] 토큰 검증 성공 - 사용자 헤더 주입");
             }
         } catch (JwtException | IllegalArgumentException e) {
-            log.warn("[JwtGatewayFilter] 토큰 처리 오류: {}", e.getMessage());
+            log.warn("[JwtGatewayFilter] 토큰 처리 중 오류 발생: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 추적 ID 동기화 및 보안 헤더 초기화
+     * 1. Tracer(Zipkin) -> 2. MDC(LoggingFilter) -> 3. UUID 순으로 ID 결정
+     */
+    private String initializeHeaders(HttpRequestHeaderWrapper mutableRequest, Tracer tracer) {
+        String traceId = (tracer.currentSpan() != null)
+                ? Objects.requireNonNull(tracer.currentSpan()).context().traceId()
+                : MDC.get("traceId");
+        if (traceId == null) {
+            traceId = UUID.randomUUID().toString().substring(0, 8);
         }
 
-        filterChain.doFilter(mutableRequest, response);
+        // MDC와 헤더를 결정된 ID로 일치시킴
+        MDC.put("traceId", traceId);
+        mutableRequest.putHeader(HEADER_TRACE_ID, traceId);
+        mutableRequest.removeHeaders("x-user-");
+        
+        return traceId;
+    }
+
+    private void sendErrorResponse(HttpServletResponse response, String traceId) throws IOException {
+        ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.UNAUTHORIZED.value(),
+                "AUTH001",
+                HttpStatus.UNAUTHORIZED.name(),
+                "이미 로그아웃되었거나 유효하지 않은 토큰입니다.",
+                null,
+                traceId,
+                LocalDateTime.now()
+        );
+
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
     }
 
     private void injectUserHeaders(HttpRequestHeaderWrapper request, Claims claims) {
