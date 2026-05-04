@@ -37,6 +37,9 @@ dependencies {
 
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.cloud:spring-cloud-starter-gateway-server-webmvc'
+	implementation 'org.springframework.cloud:spring-cloud-starter-config'
+
+	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
 
 	// jwt 관련 라이브러리
 	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
