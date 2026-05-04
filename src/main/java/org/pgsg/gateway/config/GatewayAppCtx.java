@@ -10,16 +10,16 @@ import org.pgsg.config.feign.FeignConfig;
 import org.pgsg.config.json.JsonConfig;
 import org.pgsg.config.security.*;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.Ordered;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 
-@AutoConfiguration
+@Configuration
 @Import({
 		FeignConfig.class,
 		JsonConfig.class,
