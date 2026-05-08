@@ -158,6 +158,6 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
     private String encodeValue(String value) {
         return Optional.ofNullable(value)
                 .map(val -> URLEncoder.encode(val, StandardCharsets.UTF_8))
-                .orElse("");
+                .orElse(null);
     }
 }
