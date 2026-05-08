@@ -71,7 +71,7 @@ class JwtGatewayIntegrationTest {
     void success_token_injection() throws Exception {
         // given
         String token = "valid-token";
-        String userId = "12345";
+        String userId = "00000000-0000-0000-0000-000000000001";
         String role = "ROLE_USER";
 
         Mockito.when(tokenProvider.validateToken(token)).thenReturn(true);
@@ -99,7 +99,7 @@ class JwtGatewayIntegrationTest {
     }
 
     @Test
-    @DisplayName("블랙리스트 토큰 요청 시 401 에러를 반환해야 한다")
+    @DisplayName("검증한 토큰이 블랙리스트에 포함되어 있다면 401 에러를 반환해야 한다")
     void fail_blacklisted_token() throws Exception {
         // given
         String token = "blacklisted-token";
@@ -116,10 +116,17 @@ class JwtGatewayIntegrationTest {
     }
 
     @Test
-    @DisplayName("화이트리스트 경로는 토큰 없이 통과되어야 한다")
+    @DisplayName("화이트리스트에 포함된 경로는 유효한 토큰 없이도 통과되어야 한다")
     void success_whitelist() throws Exception {
         mockMvc.perform(get("/api/v1/auth/login"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("화이트리스트에 포함되지 않은 경로는 유효한 토큰이 없으면 차단되어야 한다")
+    void fail_nonWhitelist_noToken() throws Exception {
+        mockMvc.perform(get("/test/headers")) // 비화이트리스트 경로
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -127,7 +134,7 @@ class JwtGatewayIntegrationTest {
     void success_spoofing_protection() throws Exception {
         // given
         String token = "valid-token";
-        String realUserId = "12345";
+        String realUserId = "00000000-0000-0000-0000-000000000001";
 
         Mockito.when(tokenProvider.validateToken(token)).thenReturn(true);
         Claims claims = Jwts.claims()
