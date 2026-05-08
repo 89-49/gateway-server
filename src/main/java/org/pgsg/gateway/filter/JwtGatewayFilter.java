@@ -20,6 +20,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.stereotype.Component;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -36,7 +37,12 @@ import java.util.UUID;
 public class JwtGatewayFilter extends OncePerRequestFilter {
 
     private static final String HEADER_TRACE_ID = "X-Trace-Id";
-    private static final List<String> WHITELIST = List.of("/api/v1/auth/login", "/api/v1/auth/signup", "/api/v1/auth/reissue");
+    private static final AntPathMatcher pathMatcher = new AntPathMatcher();
+    private static final List<String> WHITELIST = List.of(
+            "/api/v1/auth/login",
+            "/api/v1/auth/signup",
+            "/api/v1/auth/reissue"
+    );
 
     private final Tracer tracer;
     private final TokenProvider jwtTokenProvider;
@@ -66,18 +72,31 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
         String accessToken = JwtUtils.resolveToken(request.getHeader(HttpHeaders.AUTHORIZATION));
         String path = request.getRequestURI();
 
-        // 2. 토큰이 없거나, 화이트리스트 경로인 경우: 즉시 통과
-        if (WHITELIST.contains(path) || accessToken == null) {
+        // 2. 화이트리스트 경로인 경우: 즉시 통과 (패턴 매칭 지원)
+        if (isWhitelisted(path)) {
             filterChain.doFilter(mutableRequest, response);
             return;
         }
 
-        // 3. 통합 인증 프로세스 수행 (로컬 검증 -> 원격 검증 -> 헤더 주입)
+        // 3. 토큰이 없는 경우: 즉시 차단 (화이트리스트 제외)
+        if (accessToken == null) {
+            log.warn("[JwtGatewayFilter] Access 토큰 누락 - 차단 (TraceID: {})", traceId);
+            customAuthenticationEntryPoint.commence(request, response,
+                    new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
+            return;
+        }
+
+        // 4. 통합 인증 프로세스 수행 (로컬 검증 -> 원격 검증 -> 헤더 주입)
         if (!authenticate(mutableRequest, response, accessToken, traceId)) {
             return; // 검증 실패 시 응답 종료
         }
 
         filterChain.doFilter(mutableRequest, response);
+    }
+
+    private boolean isWhitelisted(String path) {
+        return WHITELIST.stream()
+                .anyMatch(pattern -> pathMatcher.match(pattern, path));
     }
 
     /**
@@ -158,6 +177,6 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
     private String encodeValue(String value) {
         return Optional.ofNullable(value)
                 .map(val -> URLEncoder.encode(val, StandardCharsets.UTF_8))
-                .orElse("");
+                .orElse(null);
     }
 }
