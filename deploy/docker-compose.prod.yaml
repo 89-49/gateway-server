@@ -1,0 +1,9 @@
+services:
+  gateway-server:
+    container_name: gateway-server
+    image: ${AR_IMAGE_PATH}:${IMAGE_TAG}
+    restart: always
+    ports:
+      - "8090:8090"
+    env_file:
+      - .env.runtime
