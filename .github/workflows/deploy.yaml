@@ -109,10 +109,10 @@ jobs:
       matrix:
         include:
           - vm: gateway-server-1
-            zone: asia-northeast3-b
+            zone: asia-northeast3-a
           # 나중에 3대로 늘릴 때 아래 주석 해제
           # - vm: gateway-server-2
-          #   zone: asia-northeast3-a
+          #   zone: asia-northeast3-b
           # - vm: gateway-server-3
           #   zone: asia-northeast3-c
     steps:
@@ -177,8 +177,8 @@ jobs:
               export IMAGE_TAG='$NEW_TAG'
               export AR_IMAGE_PATH='${{ env.AR_IMAGE_PATH }}'
 
-              sudo -E docker compose -f docker-compose.prod.yaml pull
-              sudo -E docker compose -f docker-compose.prod.yaml up -d
+              sudo env IMAGE_TAG="$NEW_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml pull
+              sudo env IMAGE_TAG="$NEW_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml up -d
 
               echo 'Checking actuator health (max $HEALTH_RETRIES x ${HEALTH_INTERVAL}s)...'
               HEALTHY=0
@@ -225,8 +225,8 @@ jobs:
                 export IMAGE_TAG='$ROLLBACK_TAG'
                 export AR_IMAGE_PATH='${{ env.AR_IMAGE_PATH }}'
 
-                sudo -E docker compose -f docker-compose.prod.yaml pull
-                sudo -E docker compose -f docker-compose.prod.yaml up -d
+                sudo env IMAGE_TAG="$ROLLBACK_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml pull
+                sudo env IMAGE_TAG="$ROLLBACK_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml up -d
 
                 for i in \$(seq 1 18); do
                   if curl -sf http://localhost:8090/actuator/health \
@@ -265,7 +265,9 @@ jobs:
 
   promote-stable:
     needs: [ build-and-push, deploy ]
-    if: github.ref == 'refs/heads/main'
+    if: |
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') &&
+      needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: production
