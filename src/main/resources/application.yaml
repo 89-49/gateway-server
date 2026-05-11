@@ -13,11 +13,5 @@ spring:
       discovery:
         service-id: config-server
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health, info, refresh
-
 server:
   port: 8090
