@@ -41,7 +41,10 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
     private static final List<String> WHITELIST = List.of(
             "/api/v1/auth/login",
             "/api/v1/auth/signup",
-            "/api/v1/auth/reissue"
+            "/api/v1/auth/reissue",
+            "/actuator/health",
+            "/actuator/health/**",
+            "/actuator/info"
     );
 
     private final Tracer tracer;
