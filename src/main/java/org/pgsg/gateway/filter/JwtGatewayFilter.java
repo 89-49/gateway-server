@@ -42,7 +42,9 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
             "/api/v1/auth/login",
             "/api/v1/auth/signup",
             "/api/v1/auth/reissue",
-            "/actuator/**"
+            "/actuator/health",
+            "/actuator/health/**",
+            "/actuator/info"
     );
 
     private final Tracer tracer;
