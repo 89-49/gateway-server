@@ -69,14 +69,15 @@ jobs:
             --command="
               set -e
           
-              sudo nginx -t -c /tmp/nginx.conf
+              sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf.test
+              sudo nginx -t
               if [ \$? -ne 0 ]; then
                 echo '❌ nginx.conf validation failed — gateway.conf is unchanged'
+                sudo rm /etc/nginx/conf.d/gateway.conf.test
                 exit 1
               fi
-        
+              sudo rm /etc/nginx/conf.d/gateway.conf.test
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf
-        
               sudo nginx -s reload
               echo '✅ Nginx reloaded successfully'
             "
