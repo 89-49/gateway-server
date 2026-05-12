@@ -21,6 +21,9 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # scale-vm action을 불러오기 위해 추가
+      - uses: actions/checkout@v4
+
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
