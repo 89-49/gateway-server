@@ -60,7 +60,7 @@ jobs:
             --project="$GCP_PROJECT" \
             --tunnel-through-iap
 
-        # 기존 gateway.conf를 백업 후 제거 → 검증 → 복구 또는 교체
+        # 기존 conf 백업(있을 때만) → 임시 파일 검증 → 반영 → reload 실패 시 백업 복구 → 성공 시 백업 제거
       - name: Apply nginx.conf and reload
         run: |
           gcloud compute ssh $NGINX_VM \
@@ -69,19 +69,29 @@ jobs:
             --tunnel-through-iap \
             --command="
               set -e
-          
-              sudo mv /etc/nginx/conf.d/gateway.conf /etc/nginx/conf.d/gateway.conf.bak
+
+              if [ -f /etc/nginx/conf.d/gateway.conf ]; then
+                sudo cp /etc/nginx/conf.d/gateway.conf /etc/nginx/conf.d/gateway.conf.bak
+              fi
+
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf.tmp.conf
               if ! sudo nginx -t; then
                 echo '❌ nginx.conf validation failed — gateway.conf is unchanged'
                 sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
-                sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
+                [ -f /etc/nginx/conf.d/gateway.conf.bak ] && sudo cp /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
                 exit 1
               fi
-              sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
-              sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
-              sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf
-              sudo nginx -s reload
+
+              sudo mv /etc/nginx/conf.d/gateway.conf.tmp.conf /etc/nginx/conf.d/gateway.conf
+
+              if ! sudo nginx -s reload; then
+                echo '❌ nginx reload failed — restoring backup'
+                [ -f /etc/nginx/conf.d/gateway.conf.bak ] && sudo cp /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
+                sudo nginx -s reload
+                exit 1
+              fi
+
+              sudo rm -f /etc/nginx/conf.d/gateway.conf.bak
               echo '✅ Nginx reloaded successfully'
             "
 
