@@ -19,5 +19,11 @@ management:
       exposure:
         include: health, info
 
+# /actuator/info 호출 시 게이트웨이 서버명 출력
+info:
+  app:
+    name: gateway
+    hostname: ${HOSTNAME}
+
 server:
   port: 8090
