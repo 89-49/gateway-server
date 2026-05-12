@@ -68,12 +68,15 @@ jobs:
             --tunnel-through-iap \
             --command="
               set -e
-
-              # 문법 검사
+          
+              sudo nginx -t -c /tmp/nginx.conf
+              if [ \$? -ne 0 ]; then
+                echo '❌ nginx.conf validation failed — gateway.conf is unchanged'
+                exit 1
+              fi
+        
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf
-              sudo nginx -t
-
-              # 무중단 reload
+        
               sudo nginx -s reload
               echo '✅ Nginx reloaded successfully'
             "
