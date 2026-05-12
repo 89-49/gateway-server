@@ -60,6 +60,7 @@ jobs:
             --project="$GCP_PROJECT" \
             --tunnel-through-iap
 
+        # 기존 gateway.conf를 백업 후 제거 → 검증 → 복구 또는 교체
       - name: Apply nginx.conf and reload
         run: |
           gcloud compute ssh $NGINX_VM \
@@ -69,13 +70,16 @@ jobs:
             --command="
               set -e
           
+              sudo mv /etc/nginx/conf.d/gateway.conf /etc/nginx/conf.d/gateway.conf.bak
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf.tmp.conf
               if ! sudo nginx -t; then
                 echo '❌ nginx.conf validation failed — gateway.conf is unchanged'
                 sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
+                sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
                 exit 1
               fi
               sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
+              sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf
               sudo nginx -s reload
               echo '✅ Nginx reloaded successfully'
