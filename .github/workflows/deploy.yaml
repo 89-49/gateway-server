@@ -5,6 +5,14 @@ on:
     branches: [ main, dev ]
   workflow_dispatch:
     inputs:
+      action:
+        description: "실행할 작업"
+        type: choice
+        default: deploy-only
+        options:
+          - scale-out-and-deploy   # gateway-2, 3 기동 + 전체 배포
+          - deploy-only            # 현재 RUNNING인 VM에만 배포
+          - scale-in               # gateway-2, 3 중지만 (배포 없음)
       force_apply_retention_policy:
         description: "AR retention policy 적용"
         type: boolean
@@ -18,7 +26,13 @@ env:
   HEALTH_INTERVAL: 10
 
 jobs:
+  # ────────────────────────────────────────────────────────────
+  # 1. 이미지 빌드 & Artifact Registry 푸시
+  #    - push / workflow_dispatch 모두 실행
+  #    - scale-in 선택 시 스킵
+  # ────────────────────────────────────────────────────────────
   build-and-push:
+    if: github.event.inputs.action != 'scale-in'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -94,9 +108,100 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  # ────────────────────────────────────────────────────────────
+  # 2. [신규] Scale-out: gateway-server-2, 3 기동
+  #    - workflow_dispatch + action == 'scale-out-and-deploy' 일 때만 실행
+  # ────────────────────────────────────────────────────────────
+  scale-out:
     needs: build-and-push
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'scale-out-and-deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Start gateway-server-2, gateway-server-3
+        run: |
+          for ENTRY in "gateway-server-2:asia-northeast3-b" "gateway-server-3:asia-northeast3-c"; do
+            VM="${ENTRY%%:*}"
+            ZONE="${ENTRY##*:}"
+
+            STATUS=$(gcloud compute instances describe "$VM" \
+              --zone="$ZONE" \
+              --project="$GCP_PROJECT" \
+              --format="value(status)" 2>/dev/null || echo "NOT_FOUND")
+
+            if [ "$STATUS" = "NOT_FOUND" ]; then
+              echo "::error::$VM not found in $ZONE — VM을 먼저 생성해 주세요"
+              exit 1
+            fi
+
+            if [ "$STATUS" = "TERMINATED" ]; then
+              echo "▶ Starting $VM ($ZONE)..."
+              gcloud compute instances start "$VM" \
+                --zone="$ZONE" \
+                --project="$GCP_PROJECT"
+            else
+              echo "✅ $VM is already $STATUS — skipping start"
+            fi
+          done
+
+      - name: Wait for VMs to be RUNNING
+        run: |
+          for ENTRY in "gateway-server-2:asia-northeast3-b" "gateway-server-3:asia-northeast3-c"; do
+            VM="${ENTRY%%:*}"
+            ZONE="${ENTRY##*:}"
+
+            echo "⏳ Waiting for $VM to be RUNNING..."
+            for attempt in $(seq 1 20); do
+              STATUS=$(gcloud compute instances describe "$VM" \
+                --zone="$ZONE" \
+                --project="$GCP_PROJECT" \
+                --format="value(status)")
+
+              if [ "$STATUS" = "RUNNING" ]; then
+                echo "✅ $VM is RUNNING"
+                break
+              fi
+
+              if [ "$attempt" = "20" ]; then
+                echo "::error::$VM did not reach RUNNING state in time"
+                exit 1
+              fi
+
+              echo "  $VM is $STATUS... ($attempt/20)"
+              sleep 15
+            done
+          done
+
+  # ────────────────────────────────────────────────────────────
+  # 3. 배포
+  #    - push to main  → gateway-server-1 고정 배포
+  #    - deploy-only   → 현재 RUNNING인 VM에만 배포
+  #    - scale-out-and-deploy → 3대 모두 배포
+  #    - scale-in      → 스킵
+  # ────────────────────────────────────────────────────────────
+  deploy:
+    needs: [ build-and-push, scale-out ]
+    if: |
+      always() &&
+      needs.build-and-push.result == 'success' &&
+      (needs.scale-out.result == 'success' || needs.scale-out.result == 'skipped') &&
+      github.event.inputs.action != 'scale-in' &&
+      (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -129,8 +234,20 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      # TERMINATED 상태이면 이후 모든 step 스킵
+      - name: Check VM status
+        id: vm-status
+        run: |
+          STATUS=$(gcloud compute instances describe ${{ matrix.vm }} \
+            --zone="${{ matrix.zone }}" \
+            --project="$GCP_PROJECT" \
+            --format="value(status)" 2>/dev/null || echo "NOT_FOUND")
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "${{ matrix.vm }} → $STATUS"
+
       - name: Resolve rollback target
         id: rollback
+        if: steps.vm-status.outputs.status == 'RUNNING'
         run: |
           STABLE=$(gcloud artifacts docker tags list "$AR_IMAGE_PATH" \
             --project="$GCP_PROJECT" \
@@ -145,6 +262,7 @@ jobs:
           fi
 
       - name: Sync compose file to ${{ matrix.vm }}
+        if: steps.vm-status.outputs.status == 'RUNNING'
         run: |
           gcloud compute scp deploy/docker-compose.prod.yaml \
             ${{ matrix.vm }}:/tmp/docker-compose.prod.yaml \
@@ -154,6 +272,7 @@ jobs:
 
       - name: Deploy and verify on ${{ matrix.vm }}
         id: deploy_run
+        if: steps.vm-status.outputs.status == 'RUNNING'
         env:
           NEW_TAG: ${{ needs.build-and-push.outputs.image_tag }}
           AR_TOKEN: ${{ steps.auth.outputs.access_token }}
@@ -176,8 +295,8 @@ jobs:
               export IMAGE_TAG='$NEW_TAG'
               export AR_IMAGE_PATH='${{ env.AR_IMAGE_PATH }}'
 
-              sudo env IMAGE_TAG="$NEW_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml pull
-              sudo env IMAGE_TAG="$NEW_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml up -d
+              sudo env IMAGE_TAG=\"$NEW_TAG\" AR_IMAGE_PATH=\"${{ env.AR_IMAGE_PATH }}\" docker compose -f docker-compose.prod.yaml pull
+              sudo env IMAGE_TAG=\"$NEW_TAG\" AR_IMAGE_PATH=\"${{ env.AR_IMAGE_PATH }}\" docker compose -f docker-compose.prod.yaml up -d
 
               echo 'Checking actuator health (max $HEALTH_RETRIES x ${HEALTH_INTERVAL}s)...'
               HEALTHY=0
@@ -224,8 +343,8 @@ jobs:
                 export IMAGE_TAG='$ROLLBACK_TAG'
                 export AR_IMAGE_PATH='${{ env.AR_IMAGE_PATH }}'
 
-                sudo env IMAGE_TAG="$ROLLBACK_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml pull
-                sudo env IMAGE_TAG="$ROLLBACK_TAG" AR_IMAGE_PATH="${{ env.AR_IMAGE_PATH }}" docker compose -f docker-compose.prod.yaml up -d
+                sudo env IMAGE_TAG=\"$ROLLBACK_TAG\" AR_IMAGE_PATH=\"${{ env.AR_IMAGE_PATH }}\" docker compose -f docker-compose.prod.yaml pull
+                sudo env IMAGE_TAG=\"$ROLLBACK_TAG\" AR_IMAGE_PATH=\"${{ env.AR_IMAGE_PATH }}\" docker compose -f docker-compose.prod.yaml up -d
 
                 for i in \$(seq 1 18); do
                   if curl -sf http://localhost:8090/actuator/health \
@@ -262,6 +381,61 @@ jobs:
           echo "::error::All rollback attempts failed on ${{ matrix.vm }}. Manual intervention required."
           exit 1
 
+  # ────────────────────────────────────────────────────────────
+  # 4. [신규] Scale-in: gateway-server-2, 3 중지
+  #    - workflow_dispatch + action == 'scale-in' 일 때만 실행
+  #    - build-and-push, deploy 없이 독립 실행
+  # ────────────────────────────────────────────────────────────
+  scale-in:
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'scale-in'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Stop gateway-server-2, gateway-server-3
+        run: |
+          for ENTRY in "gateway-server-2:asia-northeast3-b" "gateway-server-3:asia-northeast3-c"; do
+            VM="${ENTRY%%:*}"
+            ZONE="${ENTRY##*:}"
+
+            STATUS=$(gcloud compute instances describe "$VM" \
+              --zone="$ZONE" \
+              --project="$GCP_PROJECT" \
+              --format="value(status)" 2>/dev/null || echo "NOT_FOUND")
+
+            if [ "$STATUS" = "NOT_FOUND" ]; then
+              echo "⚠️  $VM not found — skipping"
+              continue
+            fi
+
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "⏹ Stopping $VM ($ZONE)..."
+              gcloud compute instances stop "$VM" \
+                --zone="$ZONE" \
+                --project="$GCP_PROJECT"
+              echo "✅ $VM stopped"
+            else
+              echo "  $VM is already $STATUS — skipping"
+            fi
+          done
+
+  # ────────────────────────────────────────────────────────────
+  # 5. stable 태그 승격 (기존과 동일)
+  # ────────────────────────────────────────────────────────────
   promote-stable:
     needs: [ build-and-push, deploy ]
     if: |
