@@ -13,5 +13,21 @@ spring:
       discovery:
         service-id: config-server
 
+eureka:
+  instance:
+    prefer-ip-address: true
+    hostname: ${HOSTNAME:localhost}
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+
 server:
   port: 8090
