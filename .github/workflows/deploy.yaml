@@ -30,7 +30,6 @@ jobs:
     secrets: inherit
 
   scale-out:
-    needs: build-and-push
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'scale-out-and-deploy'
@@ -59,11 +58,23 @@ jobs:
     secrets: inherit
 
   scale-in:
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'scale-in'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/_scale.yaml
+    with:
+      direction: in
+    secrets: inherit
+
+  scale-in-on-failure:
     needs: [ scale-out, deploy ]
     if: |
       always() &&
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.action == 'scale-in'
+      needs.scale-out.result == 'success' &&
+      needs.deploy.result != 'success'
     permissions:
       contents: read
       id-token: write
