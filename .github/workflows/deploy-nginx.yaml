@@ -60,7 +60,7 @@ jobs:
             --project="$GCP_PROJECT" \
             --tunnel-through-iap
 
-      # 기존 conf 백업(있을 때만) → 임시 파일 검증 → 반영 → reload 실패 시 백업 복구 → 성공 시 백업 제거
+      # 기존 conf를 bak으로 rename → sites-enabled에서 검증 → conf.d에 반영 → reload 실패 시 복구 → 성공 시 bak 제거
       - name: Apply nginx.conf and reload
         run: |
           gcloud compute ssh $NGINX_VM \
@@ -71,27 +71,25 @@ jobs:
               set -e
 
               if [ -f /etc/nginx/conf.d/gateway.conf ]; then
-                sudo cp /etc/nginx/conf.d/gateway.conf /etc/nginx/conf.d/gateway.conf.bak
+                sudo mv /etc/nginx/conf.d/gateway.conf /etc/nginx/conf.d/gateway.conf.bak
               fi
 
-              sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf.tmp.conf
+              sudo cp /tmp/nginx.conf /etc/nginx/sites-enabled/gateway.tmp.conf
+
               if ! sudo nginx -t; then
                 echo '❌ nginx.conf validation failed — gateway.conf is unchanged'
-                sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
-                if [ -f /etc/nginx/conf.d/gateway.conf.bak ]; then
-                  sudo cp /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
-                fi
+                sudo rm /etc/nginx/sites-enabled/gateway.tmp.conf
+                [ -f /etc/nginx/conf.d/gateway.conf.bak ] && sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
                 exit 1
               fi
 
-              sudo rm /etc/nginx/conf.d/gateway.conf.tmp.conf
+              sudo rm /etc/nginx/sites-enabled/gateway.tmp.conf
+              sudo mv /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf 2>/dev/null || true
               sudo cp /tmp/nginx.conf /etc/nginx/conf.d/gateway.conf
 
               if ! sudo nginx -s reload; then
-                if [ -f /etc/nginx/conf.d/gateway.conf.bak ]; then
-                  sudo cp /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
-                  sudo nginx -s reload || true
-                fi
+                [ -f /etc/nginx/conf.d/gateway.conf.bak ] && sudo cp /etc/nginx/conf.d/gateway.conf.bak /etc/nginx/conf.d/gateway.conf
+                sudo nginx -s reload || true
                 echo '❌ Nginx reload failed — rolled back to previous gateway.conf'
                 exit 1
               fi
