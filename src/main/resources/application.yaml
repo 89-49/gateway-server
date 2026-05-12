@@ -13,13 +13,23 @@ spring:
       discovery:
         service-id: config-server
 
+eureka:
+  instance:
+    prefer-ip-address: true
+    hostname: ${HOSTNAME:localhost}
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+
 management:
   endpoints:
     web:
       exposure:
         include: health, info
 
-# /actuator/info 호출 시 게이트웨이 서버명 출력
+# /actuator/info 호출 시 게이트웨이 서버명 출력(nginx 로드밸런싱 결과 확인용)
 info:
   app:
     name: gateway
