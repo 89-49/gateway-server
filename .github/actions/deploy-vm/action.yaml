@@ -113,7 +113,10 @@ runs:
               sleep ${{ inputs.health_interval }}
             done
 
-            [ \"\$HEALTHY\" != '1' ] && echo 'Actuator health check failed.' && exit 1
+            if [ \"\$HEALTHY\" != '1' ]; then
+              echo 'Actuator health check failed.'
+              exit 1
+            fi
           "
 
     - name: Rollback
