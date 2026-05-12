@@ -110,11 +110,10 @@ jobs:
         include:
           - vm: gateway-server-1
             zone: asia-northeast3-a
-          # 나중에 3대로 늘릴 때 아래 주석 해제
-          # - vm: gateway-server-2
-          #   zone: asia-northeast3-b
-          # - vm: gateway-server-3
-          #   zone: asia-northeast3-c
+          - vm: gateway-server-2
+            zone: asia-northeast3-b
+          - vm: gateway-server-3
+            zone: asia-northeast3-c
     steps:
       - uses: actions/checkout@v4
 
