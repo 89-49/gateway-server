@@ -33,7 +33,7 @@ management:
 info:
   app:
     name: gateway
-    hostname: ${HOSTNAME}
+    hostname: ${HOSTNAME:localhost}
 
 server:
   port: 8090
