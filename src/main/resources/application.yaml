@@ -3,7 +3,7 @@ spring:
     name: gateway-server
   config:
     import:
-      - "optional:configserver:http://34.50.50.170:13100"
+      - "optional:configserver:"
       - "optional:file:.env[.properties]"
   cloud:
     config:
@@ -12,6 +12,7 @@ spring:
       override-system-properties: false
       discovery:
         service-id: config-server
+        enabled: true
 
 eureka:
   instance:
@@ -22,12 +23,6 @@ eureka:
     fetch-registry: true
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health, info
 
 server:
   port: 8090
