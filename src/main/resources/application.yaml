@@ -3,7 +3,7 @@ spring:
     name: gateway-server
   config:
     import:
-      - "optional:configserver"
+      - "optional:configserver:"
       - "optional:file:.env[.properties]"
   cloud:
     config:
