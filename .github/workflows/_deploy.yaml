@@ -12,7 +12,7 @@ env:
   AR_IMAGE_PATH: ${{ vars.AR_IMAGE_PATH }}
   WORK_DIR: /opt/gateway
   HEALTH_RETRIES: 30
-  HEALTH_INTERVAL: 10
+  HEALTH_INTERVAL: 5
 
 jobs:
   deploy:
