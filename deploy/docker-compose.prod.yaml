@@ -12,7 +12,7 @@ services:
 
   promtail:
     image: grafana/promtail:2.9.1
-    container_name: gateway-server-promtail
+    container_name: promtail
     restart: always
     volumes:
       - /opt/gateway/promtail-config.yml:/etc/promtail/config.yml
