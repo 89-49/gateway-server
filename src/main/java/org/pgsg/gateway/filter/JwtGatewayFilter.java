@@ -48,8 +48,7 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
             "/actuator/prometheus",
             "/actuator/prometheus/**",
             "/actuator/metrics",
-            "/actuator/metrics/**",
-            "/actuator/refresh"
+            "/actuator/metrics/**"
     );
 
     private final Tracer tracer;
