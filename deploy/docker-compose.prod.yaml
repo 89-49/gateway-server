@@ -7,6 +7,8 @@ services:
       - "8090:8090"
     env_file:
       - .env
+    volumes:
+      - /opt/gateway/logs:/logs # 게이트웨이에서 생성한 로그 파일을 저장할 경로
     networks:
       - pgsg-network
 
@@ -16,7 +18,7 @@ services:
     restart: always
     volumes:
       - /opt/gateway/promtail-config.yml:/etc/promtail/config.yml
-      - /opt/gateway/logs:/logs
+      - /opt/gateway/logs:/logs # 로그 파일을 저장한 경로와 동일하게 지정
     command: -config.file=/etc/promtail/config.yml
     networks:
       - pgsg-network
