@@ -75,6 +75,12 @@ runs:
           --zone="${{ inputs.zone }}" \
           --project="${{ inputs.gcp_project }}" \
           --tunnel-through-iap
+        
+        gcloud compute scp deploy/promtail-config.yml \
+          ${{ inputs.vm }}:/tmp/promtail-config.yml \
+          --zone="${{ inputs.zone }}" \
+          --project="${{ inputs.gcp_project }}" \
+          --tunnel-through-iap
 
     - name: Deploy and verify
       id: deploy_run
@@ -94,6 +100,7 @@ runs:
 
             sudo mkdir -p ${{ inputs.work_dir }}
             sudo mv /tmp/docker-compose.prod.yaml ${{ inputs.work_dir }}/docker-compose.prod.yaml
+            sudo mv /tmp/promtail-config.yml ${{ inputs.work_dir }}/promtail-config.yml
             cd ${{ inputs.work_dir }}
 
             sudo env IMAGE_TAG=\"${{ inputs.image_tag }}\" AR_IMAGE_PATH=\"${{ inputs.ar_image_path }}\" \
@@ -144,12 +151,12 @@ runs:
               sudo env IMAGE_TAG=\"${{ steps.rollback.outputs.tag }}\" AR_IMAGE_PATH=\"${{ inputs.ar_image_path }}\" \
                 docker compose -f docker-compose.prod.yaml up -d
 
-              for i in \$(seq 1 18); do
+              for i in \$(seq 1 ${{ inputs.health_retries }}); do
                 if curl -sf http://localhost:8090/actuator/health | grep -q '\"status\":\"UP\"'; then
                   echo \"Rollback container UP (attempt \$i)\"
                   exit 0
                 fi
-                sleep 10
+                sleep ${{ inputs.health_interval }}
               done
 
               echo 'Rollback container did not become healthy.'

@@ -7,3 +7,20 @@ services:
       - "8090:8090"
     env_file:
       - .env
+    networks:
+      - pgsg-network
+
+  promtail:
+    image: grafana/promtail:2.9.1
+    container_name: gateway-server-promtail
+    restart: always
+    volumes:
+      - /opt/gateway/promtail-config.yml:/etc/promtail/config.yml
+      - /opt/gateway/logs:/logs
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - pgsg-network
+
+networks:
+  pgsg-network:
+    external: true
