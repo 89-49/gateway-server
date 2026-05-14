@@ -30,7 +30,7 @@ ext {
 
 dependencies {
 
-	implementation('org.pgsg:common:0.2.5-SNAPSHOT') {
+	implementation('org.pgsg:common:0.3.2-SNAPSHOT') {
 		exclude group: 'org.springframework.boot', module: 'spring-boot-starter-data-jpa'
 		exclude group: 'com.querydsl', module: 'querydsl-jpa'
 	}
