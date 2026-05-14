@@ -102,6 +102,11 @@ runs:
             sudo mv /tmp/docker-compose.prod.yaml ${{ inputs.work_dir }}/docker-compose.prod.yaml
             sudo mv /tmp/promtail-config.yml ${{ inputs.work_dir }}/promtail-config.yml
             cd ${{ inputs.work_dir }}
+        
+            if ! sudo docker network inspect pgsg-network > /dev/null 2>&1; then
+              echo 'pgsg-network not found. Creating...'
+              sudo docker network create pgsg-network
+            fi
 
             sudo env IMAGE_TAG=\"${{ inputs.image_tag }}\" AR_IMAGE_PATH=\"${{ inputs.ar_image_path }}\" \
               docker compose -f docker-compose.prod.yaml pull
