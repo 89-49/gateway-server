@@ -28,7 +28,6 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -108,31 +107,27 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 
 	private Mono<Void> authenticate(ServerWebExchange exchange, ServerHttpRequest sanitized,
 									GatewayFilterChain chain, String accessToken, String traceId) {
-		// 캐시 HIT 시 validateToken, verifyToken, parseClaims 모두 생략
-		Claims cached = claimsCache.getIfPresent(accessToken);
-		if (cached != null) {
-			log.debug("[JwtGatewayFilter] 캐시 HIT (TraceID: {})", traceId);
-			ServerHttpRequest mutated = injectUserHeaders(sanitized, cached);
-			return chain.filter(exchange.mutate().request(mutated).build());
-		}
-
-		// [Step 1] 로컬 검증
-		return Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken))
-				.subscribeOn(Schedulers.parallel())
+		// [Step 1] 로컬 검증 (캐시 HIT 시 생략)
+		return (claimsCache.getIfPresent(accessToken) != null
+				? Mono.just(true)
+				: Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken)))
 				.flatMap(valid -> {
 					if (!valid) {
-						log.debug("[JwtGatewayFilter] 유효하지 않은 토큰 - 차단 (TraceID: {})", traceId);
 						return Mono.error(new InsufficientAuthenticationException("유효하지 않거나 만료된 토큰입니다."));
 					}
-					// [Step 2] 원격 검증 (WebClient 비동기 호출)
+					// [Step 2] 블랙리스트 검증 (항상 수행)
 					return authProvider.verifyToken(accessToken);
 				})
 				.flatMap(verified -> {
 					if (!verified) {
-						log.warn("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
 						return Mono.error(new InsufficientAuthenticationException("이미 로그아웃되었거나 사용할 수 없는 토큰입니다."));
 					}
-					// [Step 3] Claims 파싱
+					// [Step 3] Claims 파싱 (캐시 HIT 시 생략)
+					Claims cached = claimsCache.getIfPresent(accessToken);
+					if (cached != null) {
+						log.debug("[JwtGatewayFilter] 캐시 HIT (TraceID: {})", traceId);
+						return Mono.just(cached);
+					}
 					return Mono.fromCallable(() -> jwtTokenProvider.parseClaims(accessToken))
 							.doOnNext(claims -> claimsCache.put(accessToken, claims));
 				})
