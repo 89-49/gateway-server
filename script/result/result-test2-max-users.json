@@ -225,9 +225,6 @@
       "type": "counter"
     }
   },
-  "setup_data": {
-    "token": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5MTA3YWE3Yy1hNzMzLTQ1MTQtODAzMy04OWU2MDFhNDUwYWIiLCJ0b2tlbl90eXBlIjoiYWNjZXNzIiwidXNlcm5hbWUiOiJ1c2VyMDAwMDEiLCJyb2xlIjoiUk9MRV9VU0VSIiwibmFtZSI6IuyYpOykgOyEnCIsIm5pY2tuYW1lIjoi67mg66W46rCV7JWE7KeAMSIsImVuYWJsZWQiOnRydWUsImlhdCI6MTc3ODk0MTU1MiwiZXhwIjoxNzc4OTQzMzUyfQ.wDo3sJrGGBDT3WWM-005jvAcVw9DwjGqlSt0M6qHpmE"
-  },
   "root_group": {
     "name": "",
     "path": "",

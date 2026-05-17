@@ -83,8 +83,10 @@ export function teardown(data) {
 }
 
 export function handleSummary(data) {
+    const { setup_data, ...rest } = data;
+
     return {
-        'result/result-test1-baseline.json': JSON.stringify(data, null, 2),
+        'result/result-test1-baseline.json': JSON.stringify(rest, null, 2),
         stdout: textSummary(data, { indent: ' ', enableColors: true }),
     };
 }

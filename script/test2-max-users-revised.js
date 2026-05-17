@@ -146,6 +146,8 @@ export function teardown(data) {
 }
 
 export function handleSummary(data) {
+    const { setup_data, ...rest } = data;
+
     // 단계별 결과 요약 출력
     const stages = [100, 200, 300, 400, 500];
     let stageSummary = '\n===== 단계별 결과 요약 =====\n';
@@ -169,7 +171,7 @@ export function handleSummary(data) {
     stageSummary += '\n============================\n';
 
     return {
-        'result/result-test2-max-users-revised.json': JSON.stringify(data, null, 2),
+        'result/result-test2-max-users-revised.json': JSON.stringify(rest, null, 2),
         stdout: textSummary(data, { indent: ' ', enableColors: true }) + stageSummary,
     };
 }

@@ -69,8 +69,10 @@ export default function (data) {
 }
 
 export function handleSummary(data) {
+    const { setup_data, ...rest } = data;
+
     return {
-        'result/result-test2-max-users.json': JSON.stringify(data, null, 2),
+        'result/result-test2-max-users.json': JSON.stringify(rest, null, 2),
         stdout: textSummary(data, { indent: ' ', enableColors: true }),
     };
 }
