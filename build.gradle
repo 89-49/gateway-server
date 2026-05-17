@@ -33,8 +33,8 @@ dependencies {
 	implementation('org.pgsg:common:0.3.2-SNAPSHOT') {
 		exclude group: 'org.springframework.boot', module: 'spring-boot-starter-data-jpa'
 		exclude group: 'com.querydsl', module: 'querydsl-jpa'
-		exclude group: 'org.springdoc:', module: 'springdoc-openapi-starter-webmvc-ui:2.8.8'
-		exclude group: 'org.org.springframework.cloud', module: 'spring-cloud-starter-openfeign'
+		exclude group: 'org.springdoc', module: 'springdoc-openapi-starter-webmvc-ui'
+		exclude group: 'org.springframework.cloud', module: 'spring-cloud-starter-openfeign'
 		exclude group: 'org.springframework.boot', module: 'spring-boot-starter-web'
 	}
 
