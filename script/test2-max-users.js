@@ -39,6 +39,8 @@ export const options = {
 
 // setup()에서 토큰 1개 발급 후 전체 VU 재사용
 export function setup() {
+    console.log(`테스트 시작: ${new Date().toISOString()}`);
+
     const res = http.post(
         `${BASE_URL}/api/v1/auth/login`,
         JSON.stringify({ username: 'user00001', password: 'password' }),
@@ -67,6 +69,10 @@ export default function (data) {
 
     latency.add(res.timings.duration);
     errorRate.add(!ok);
+}
+
+export function teardown(data) {
+    console.log(`테스트 종료: ${new Date().toISOString()}`);
 }
 
 export function handleSummary(data) {
