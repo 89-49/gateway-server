@@ -1,29 +1,31 @@
 package org.pgsg.gateway.filter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.micrometer.tracing.Tracer;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.pgsg.config.security.CustomAuthenticationEntryPoint;
+import org.pgsg.common.response.CommonResponse;
 import org.pgsg.config.security.jwt.JwtUtils;
 import org.pgsg.config.security.token.TokenProvider;
 import org.pgsg.config.security.token.TokenType;
 import org.pgsg.gateway.auth.AuthProvider;
-import org.slf4j.MDC;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
+import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
-import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.server.ServerWebExchange;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
-import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -33,8 +35,7 @@ import java.util.UUID;
 
 @Slf4j
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 1)
-public class JwtGatewayFilter extends OncePerRequestFilter {
+public class JwtGatewayFilter implements GlobalFilter, Ordered {
 
     private static final String HEADER_TRACE_ID = "X-Trace-Id";
     private static final AntPathMatcher pathMatcher = new AntPathMatcher();
@@ -54,136 +55,145 @@ public class JwtGatewayFilter extends OncePerRequestFilter {
     private final Tracer tracer;
     private final TokenProvider jwtTokenProvider;
     private final AuthProvider authProvider;
-    private final CustomAuthenticationEntryPoint customAuthenticationEntryPoint;
+    private final ObjectMapper objectMapper;
 
-    public JwtGatewayFilter(
-            Tracer tracer,
-            TokenProvider jwtTokenProvider,
-            AuthProvider authProvider,
-            @Lazy CustomAuthenticationEntryPoint customAuthenticationEntryPoint) {
+    public JwtGatewayFilter(Tracer tracer, TokenProvider jwtTokenProvider, AuthProvider authProvider, ObjectMapper objectMapper) {
         this.tracer = tracer;
         this.jwtTokenProvider = jwtTokenProvider;
         this.authProvider = authProvider;
-        this.customAuthenticationEntryPoint = customAuthenticationEntryPoint;
+        this.objectMapper = objectMapper;
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        ServerHttpRequest request = exchange.getRequest();
+        String path = request.getURI().getPath();
+        String traceId = resolveTraceId();
 
-        HttpRequestHeaderWrapper mutableRequest = new HttpRequestHeaderWrapper(request);
+        // 헤더 초기화: x-user-* 제거 + traceId 주입
+        ServerHttpRequest sanitized = request.mutate()
+                .headers(headers -> {
+                    headers.keySet().removeIf(key -> key.toLowerCase().startsWith("x-user-"));
+                    headers.set(HEADER_TRACE_ID, traceId);
+                })
+                .build();
 
-        // 1. 추적 ID 동기화 및 보안 헤더 초기화
-        String traceId = initializeHeaders(mutableRequest, tracer);
-        
-        log.info("[JwtGatewayFilter] 요청 수신: {} {}", request.getMethod(), request.getRequestURI());
-        String accessToken = JwtUtils.resolveToken(request.getHeader(HttpHeaders.AUTHORIZATION));
-        String path = request.getRequestURI();
+        log.info("[JwtGatewayFilter] 요청 수신: {} {}", request.getMethod(), path);
 
-        // 2. 화이트리스트 경로인 경우: 즉시 통과 (패턴 매칭 지원)
+        // 화이트리스트 통과
         if (isWhitelisted(path)) {
-            filterChain.doFilter(mutableRequest, response);
-            return;
+            return chain.filter(exchange.mutate().request(sanitized).build());
         }
 
-        // 3. 토큰이 없는 경우: 즉시 차단 (화이트리스트 제외)
+        // 토큰 누락
+        String accessToken = JwtUtils.resolveToken(
+                request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+
         if (accessToken == null) {
             log.warn("[JwtGatewayFilter] Access 토큰 누락 - 차단 (TraceID: {})", traceId);
-            customAuthenticationEntryPoint.commence(request, response,
-                    new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
-            return;
+            return onAuthError(exchange, "Access 토큰이 필요합니다.", traceId);
         }
 
-        // 4. 통합 인증 프로세스 수행 (로컬 검증 -> 원격 검증 -> 헤더 주입)
-        if (!authenticate(mutableRequest, response, accessToken, traceId)) {
-            return; // 검증 실패 시 응답 종료
-        }
+        return authenticate(exchange, sanitized, chain, accessToken, traceId);
+    }
 
-        filterChain.doFilter(mutableRequest, response);
+    private Mono<Void> authenticate(ServerWebExchange exchange, ServerHttpRequest sanitized,
+                                    GatewayFilterChain chain, String accessToken, String traceId) {
+        // [Step 1] 로컬 검증
+        return Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(valid -> {
+                    if (!valid) {
+                        log.info("[JwtGatewayFilter] 유효하지 않은 토큰 - 차단 (TraceID: {})", traceId);
+                        return Mono.error(new InsufficientAuthenticationException("유효하지 않거나 만료된 토큰입니다."));
+                    }
+                    // [Step 2] 원격 검증 (WebClient 비동기 호출)
+                    return authProvider.verifyToken(accessToken);
+                })
+                .flatMap(verified -> {
+                    if (!verified) {
+                        log.warn("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
+                        return Mono.error(new InsufficientAuthenticationException("이미 로그아웃되었거나 사용할 수 없는 토큰입니다."));
+                    }
+                    // [Step 3] Claims 파싱
+                    return Mono.fromCallable(() -> jwtTokenProvider.parseClaims(accessToken))
+                            .subscribeOn(Schedulers.boundedElastic());
+                })
+                .flatMap(claims -> {
+                    String tokenType = claims.get(JwtUtils.CLAIM_TOKEN_TYPE, String.class);
+                    if (!TokenType.ACCESS.matches(tokenType)) {
+                        log.warn("[JwtGatewayFilter] 허용되지 않은 토큰 타입 ({}) - 차단 (TraceID: {})", tokenType, traceId);
+                        return Mono.error(new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
+                    }
+                    // [Step 4] 사용자 헤더 주입
+                    ServerHttpRequest mutated = injectUserHeaders(sanitized, claims);
+                    log.info("[JwtGatewayFilter] 인증 성공 (TraceID: {})", traceId);
+                    return chain.filter(exchange.mutate().request(mutated).build());
+                })
+                .onErrorResume(InsufficientAuthenticationException.class,
+                        e -> onAuthError(exchange, e.getMessage(), traceId))
+                .onErrorResume(JwtException.class, e -> {
+                    log.error("[JwtGatewayFilter] JWT 예외: {} (TraceID: {})", e.getMessage(), traceId);
+                    return onAuthError(exchange, "토큰 인증 중 오류가 발생했습니다.", traceId);
+                })
+                .onErrorResume(IllegalArgumentException.class, e -> {
+                    log.error("[JwtGatewayFilter] 잘못된 인자: {} (TraceID: {})", e.getMessage(), traceId);
+                    return onAuthError(exchange, "토큰 인증 중 오류가 발생했습니다.", traceId);
+                });
+    }
+
+    private Mono<Void> onAuthError(ServerWebExchange exchange, String message, String traceId) {
+        ServerHttpResponse response = exchange.getResponse();
+        response.setStatusCode(HttpStatus.UNAUTHORIZED);
+        response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+
+        CommonResponse<Object> errorResponse = new CommonResponse<>(
+                false,
+                message,
+                null,
+                traceId
+        );
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(errorResponse);
+            return response.writeWith(Mono.just(response.bufferFactory().wrap(body)));
+        } catch (Exception e) {
+            log.error("[JwtGatewayFilter] JSON 직렬화 오류 (TraceID: {})", traceId, e);
+            return Mono.error(e);
+        }
+    }
+
+    private ServerHttpRequest injectUserHeaders(ServerHttpRequest request, Claims claims) {
+        Boolean enabled = claims.get(JwtUtils.CLAIM_ENABLED, Boolean.class);
+        return request.mutate()
+                .header(JwtUtils.HEADER_USER_ID, claims.getSubject())
+                .header(JwtUtils.HEADER_USERNAME, claims.get(JwtUtils.CLAIM_USERNAME, String.class))
+                .header(JwtUtils.HEADER_ROLES, claims.get(JwtUtils.CLAIM_USER_ROLE, String.class))
+                .header(JwtUtils.HEADER_USER_NAME, encodeValue(claims.get(JwtUtils.CLAIM_NAME, String.class)))
+                .header(JwtUtils.HEADER_USER_NICKNAME, encodeValue(claims.get(JwtUtils.CLAIM_NICKNAME, String.class)))
+                .header(JwtUtils.HEADER_ENABLED, enabled != null ? enabled.toString() : "false")
+                .build();
     }
 
     private boolean isWhitelisted(String path) {
-        return WHITELIST.stream()
-                .anyMatch(pattern -> pathMatcher.match(pattern, path));
+        return WHITELIST.stream().anyMatch(pattern -> pathMatcher.match(pattern, path));
     }
 
-    /**
-     * 통합 인증 로직 (최적화된 순서)
-     * 1. 로컬 검증 (Signature, Expiration) - 비용 낮음
-     * 2. 원격 검증 (Blacklist 체크) - 비용 높음
-     * 3. Claims 파싱 및 헤더 주입
-     */
-    private boolean authenticate(HttpRequestHeaderWrapper request, HttpServletResponse response, String accessToken, String traceId) throws IOException, ServletException {
-        try {
-            // [Step 1] 로컬 검증 (가장 먼저 수행하여 잘못된 토큰의 원격 호출 방지)
-            if (!jwtTokenProvider.validateToken(accessToken)) {
-                log.info("[JwtGatewayFilter] 유효하지 않은 토큰 - 차단 (TraceID: {})", traceId);
-                customAuthenticationEntryPoint.commence(request, response,
-                        new InsufficientAuthenticationException("유효하지 않거나 만료된 토큰입니다."));
-                return false;
-            }
-
-            // [Step 2] 원격 검증 (로컬 검증 통과 시에만 실시간 블랙리스트 확인)
-            if (!authProvider.verifyToken(accessToken)) {
-                log.warn("[JwtGatewayFilter] 블랙리스트 토큰 감지 - 차단 (TraceID: {})", traceId);
-                customAuthenticationEntryPoint.commence(request, response,
-                        new InsufficientAuthenticationException("이미 로그아웃되었거나 사용할 수 없는 토큰입니다."));
-                return false;
-            }
-
-            // [Step 3] Claims 추출 및 토큰 타입 확인
-            Claims claims = jwtTokenProvider.parseClaims(accessToken);
-            String tokenType = claims.get(JwtUtils.CLAIM_TOKEN_TYPE, String.class);
-
-            if (!TokenType.ACCESS.matches(tokenType)) {
-                log.warn("[JwtGatewayFilter] 허용되지 않은 토큰 타입 ({}) - 차단 (TraceID: {})", tokenType, traceId);
-                customAuthenticationEntryPoint.commence(request, response,
-                        new InsufficientAuthenticationException("Access 토큰이 필요합니다."));
-                return false;
-            }
-
-            // [Step 4] 검증 완료 - 사용자 헤더 주입
-            injectUserHeaders(request, claims);
-            log.info("[JwtGatewayFilter] 인증 성공 - 사용자 헤더 주입 (TraceID: {})", traceId);
-            return true;
-
-        } catch (JwtException | IllegalArgumentException e) {
-            log.error("[JwtGatewayFilter] 인증 처리 중 예외 발생: {} (TraceID: {})", e.getMessage(), traceId);
-            customAuthenticationEntryPoint.commence(request, response,
-                    new InsufficientAuthenticationException("토큰 인증 중 오류가 발생했습니다."));
-            return false;
+    private String resolveTraceId() {
+        if (tracer.currentSpan() != null) {
+            return Objects.requireNonNull(tracer.currentSpan()).context().traceId();
         }
-    }
-
-    private String initializeHeaders(HttpRequestHeaderWrapper mutableRequest, Tracer tracer) {
-        String traceId = (tracer.currentSpan() != null)
-                ? Objects.requireNonNull(tracer.currentSpan()).context().traceId()
-                : MDC.get("traceId");
-
-        if (traceId == null) {
-            traceId = UUID.randomUUID().toString().substring(0, 8);
-        }
-
-        MDC.put("traceId", traceId);
-        mutableRequest.removeHeaders("x-user-");
-        mutableRequest.putHeader(HEADER_TRACE_ID, traceId);
-        
-        return traceId;
-    }
-
-    private void injectUserHeaders(HttpRequestHeaderWrapper request, Claims claims) {
-        request.putHeader(JwtUtils.HEADER_USER_ID, claims.getSubject());
-        request.putHeader(JwtUtils.HEADER_USERNAME, claims.get(JwtUtils.CLAIM_USERNAME, String.class));
-        request.putHeader(JwtUtils.HEADER_ROLES, claims.get(JwtUtils.CLAIM_USER_ROLE, String.class));
-        request.putHeader(JwtUtils.HEADER_USER_NAME, encodeValue(claims.get(JwtUtils.CLAIM_NAME, String.class)));
-        request.putHeader(JwtUtils.HEADER_USER_NICKNAME, encodeValue(claims.get(JwtUtils.CLAIM_NICKNAME, String.class)));
-
-        Boolean enabled = claims.get(JwtUtils.CLAIM_ENABLED, Boolean.class);
-        request.putHeader(JwtUtils.HEADER_ENABLED, enabled != null ? enabled.toString() : "false");
+        return UUID.randomUUID().toString().substring(0, 8);
     }
 
     private String encodeValue(String value) {
         return Optional.ofNullable(value)
-                .map(val -> URLEncoder.encode(val, StandardCharsets.UTF_8))
+                .map(v -> URLEncoder.encode(v, StandardCharsets.UTF_8))
                 .orElse(null);
+    }
+
+    @Override
+    public int getOrder() {
+        return SecurityWebFiltersOrder.AUTHORIZATION.getOrder() + 1;
     }
 }
