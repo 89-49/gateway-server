@@ -1,6 +1,7 @@
 package org.pgsg.gateway.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.micrometer.tracing.Tracer;
@@ -10,6 +11,7 @@ import org.pgsg.config.security.jwt.JwtUtils;
 import org.pgsg.config.security.token.TokenProvider;
 import org.pgsg.config.security.token.TokenType;
 import org.pgsg.gateway.auth.AuthProvider;
+import org.pgsg.gateway.cache.CacheUtil;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.core.Ordered;
@@ -26,6 +28,7 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -58,12 +61,16 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 	private final TokenProvider jwtTokenProvider;
 	private final AuthProvider authProvider;
 	private final ObjectMapper objectMapper;
+	private final Cache<String, Claims> claimsCache;
 
-	public JwtGatewayFilter(Tracer tracer, TokenProvider jwtTokenProvider, AuthProvider authProvider, ObjectMapper objectMapper) {
+	public JwtGatewayFilter(Tracer tracer, TokenProvider jwtTokenProvider,
+							AuthProvider authProvider, ObjectMapper objectMapper,
+							CacheUtil cacheUtil) {
 		this.tracer = tracer;
 		this.jwtTokenProvider = jwtTokenProvider;
 		this.authProvider = authProvider;
 		this.objectMapper = objectMapper;
+		this.claimsCache = cacheUtil.getClaimsCache();
 	}
 
 	@Override
@@ -101,8 +108,17 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 
 	private Mono<Void> authenticate(ServerWebExchange exchange, ServerHttpRequest sanitized,
 									GatewayFilterChain chain, String accessToken, String traceId) {
+		// 캐시 HIT 시 validateToken, verifyToken, parseClaims 모두 생략
+		Claims cached = claimsCache.getIfPresent(accessToken);
+		if (cached != null) {
+			log.debug("[JwtGatewayFilter] 캐시 HIT (TraceID: {})", traceId);
+			ServerHttpRequest mutated = injectUserHeaders(sanitized, cached);
+			return chain.filter(exchange.mutate().request(mutated).build());
+		}
+
 		// [Step 1] 로컬 검증
 		return Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken))
+				.subscribeOn(Schedulers.parallel())
 				.flatMap(valid -> {
 					if (!valid) {
 						log.debug("[JwtGatewayFilter] 유효하지 않은 토큰 - 차단 (TraceID: {})", traceId);
@@ -117,7 +133,8 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 						return Mono.error(new InsufficientAuthenticationException("이미 로그아웃되었거나 사용할 수 없는 토큰입니다."));
 					}
 					// [Step 3] Claims 파싱
-					return Mono.fromCallable(() -> jwtTokenProvider.parseClaims(accessToken));
+					return Mono.fromCallable(() -> jwtTokenProvider.parseClaims(accessToken))
+							.doOnNext(claims -> claimsCache.put(accessToken, claims));
 				})
 				.flatMap(claims -> {
 					String tokenType = claims.get(JwtUtils.CLAIM_TOKEN_TYPE, String.class);
