@@ -77,22 +77,41 @@ export function setup() {
 
     console.log(`토큰 발급 시작: ${target}개`);
 
+    const password = __ENV.PASSWORD || 'password';
+
     for (let i = 0; i < target; i++) {
         const res = http.post(
             `${BASE_URL}/api/v1/auth/login`,
-            JSON.stringify({ username: accounts[i], password: 'password' }),
-            { headers: { 'Content-Type': 'application/json' } }
+            JSON.stringify({ username: accounts[i], password }),
+            {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: '10s',
+            }
         );
 
-        const body = res.json();
-        if (body.success && body.data.accessToken) {
-            tokens.push(body.data.accessToken);
-        } else {
-            console.warn(`로그인 실패: ${accounts[i]}`);
+        if (res.status !== 200) {
+            console.warn(`로그인 실패 (status ${res.status}): ${accounts[i]}`);
+            continue;
+        }
+
+        try {
+            const body = res.json();
+            if (body && body.success && body.data && body.data.accessToken) {
+                tokens.push(body.data.accessToken);
+            } else {
+                console.warn(`토큰 없음: ${accounts[i]}`);
+            }
+        } catch (e) {
+            console.warn(`JSON 파싱 실패: ${accounts[i]} - ${e}`);
         }
     }
 
     console.log(`토큰 발급 완료: ${tokens.length}개 (최대 동시 접속자 수 탐색)`);
+
+    if (tokens.length === 0) {
+        throw new Error('발급된 토큰이 없습니다. 테스트를 중단합니다.');
+    }
+
     return { tokens, startTime: Date.now() };
 }
 
@@ -107,35 +126,38 @@ export default function (data) {
 
     const ok = check(res, {
         'status 200':       (r) => r.status === 200,
-        'latency < 3000ms': (r) => r.timings.duration < 3000,
+        'latency < 3000ms': (r) => r.timings?.duration < 3000,
     });
 
-    latency.add(res.timings.duration);
+    if (res.timings) {
+        latency.add(res.timings.duration);
+    }
     errorRate.add(!ok);
 
     // 단계별 메트릭 기록
     const elapsedSeconds = (Date.now() - data.startTime) / 1000;
     const stage = getCurrentStage(elapsedSeconds);
+    const duration = res.timings?.duration;
 
     switch (stage) {
         case 100:
-            stage100Latency.add(res.timings.duration);
+            if (duration !== undefined) stage100Latency.add(duration);
             stage100Errors.add(!ok);
             break;
         case 200:
-            stage200Latency.add(res.timings.duration);
+            if (duration !== undefined) stage200Latency.add(duration);
             stage200Errors.add(!ok);
             break;
         case 300:
-            stage300Latency.add(res.timings.duration);
+            if (duration !== undefined) stage300Latency.add(duration);
             stage300Errors.add(!ok);
             break;
         case 400:
-            stage400Latency.add(res.timings.duration);
+            if (duration !== undefined) stage400Latency.add(duration);
             stage400Errors.add(!ok);
             break;
         case 500:
-            stage500Latency.add(res.timings.duration);
+            if (duration !== undefined) stage500Latency.add(duration);
             stage500Errors.add(!ok);
             break;
     }

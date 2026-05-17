@@ -6,6 +6,7 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
 // 환경변수
 // 실행 방법:
 // k6 run --env NGINX_IP=34.64.xxx.xxx test2-max-users.js
+// ⚠️ 이 스크립트는 아카이브용으며, test2-max-users-revised.js로 대체되었습니다.
 
 const BASE_URL = `http://${__ENV.NGINX_IP}`;
 
