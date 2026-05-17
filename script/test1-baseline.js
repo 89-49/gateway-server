@@ -45,18 +45,35 @@ export function setup() {
         const res = http.post(
             `${BASE_URL}/api/v1/auth/login`,
             JSON.stringify({ username: accounts[i], password: 'password' }),
-            { headers: { 'Content-Type': 'application/json' } }
+            {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: '10s',
+            }
         );
 
-        const body = res.json();
-        if (body.success && body.data.accessToken) {
-            tokens.push(body.data.accessToken);
-        } else {
-            console.warn(`로그인 실패: ${accounts[i]}`);
+        if (res.status !== 200) {
+            console.warn(`로그인 실패 (status ${res.status}): ${accounts[i]}`);
+            continue;
+        }
+
+        try {
+            const body = res.json();
+            if (body && body.success && body.data && body.data.accessToken) {
+                tokens.push(body.data.accessToken);
+            } else {
+                console.warn(`토큰 없음: ${accounts[i]}`);
+            }
+        } catch (e) {
+            console.warn(`JSON 파싱 실패: ${accounts[i]} - ${e}`);
         }
     }
 
     console.log(`토큰 발급 완료: ${tokens.length}개`);
+
+    if (tokens.length === 0) {
+        throw new Error('발급된 토큰이 없습니다. 테스트를 중단합니다.');
+    }
+
     return { tokens };
 }
 
@@ -71,10 +88,12 @@ export default function (data) {
 
     const ok = check(res, {
         'status 200':        (r) => r.status === 200,
-        'latency < 3000ms':  (r) => r.timings.duration < 3000,
+        'latency < 3000ms':  (r) => r.timings?.duration < 3000,
     });
 
-    latency.add(res.timings.duration);
+    if (res.timings) {
+        latency.add(res.timings.duration);
+    }
     errorRate.add(!ok);
 }
 
