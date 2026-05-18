@@ -31,10 +31,7 @@ import reactor.core.publisher.Mono;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -108,9 +105,12 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 	private Mono<Void> authenticate(ServerWebExchange exchange, ServerHttpRequest sanitized,
 									GatewayFilterChain chain, String accessToken, String traceId) {
 		// [Step 1] 로컬 검증 (캐시 HIT 시 생략)
-		return (claimsCache.getIfPresent(accessToken) != null
+		Claims cachedClaims = claimsCache.getIfPresent(accessToken);
+		Mono<Boolean> localValidation = (cachedClaims != null && !isExpired(cachedClaims))
 				? Mono.just(true)
-				: Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken)))
+				: Mono.fromCallable(() -> jwtTokenProvider.validateToken(accessToken));
+
+		return localValidation
 				.flatMap(valid -> {
 					if (!valid) {
 						return Mono.error(new InsufficientAuthenticationException("유효하지 않거나 만료된 토큰입니다."));
@@ -152,6 +152,11 @@ public class JwtGatewayFilter implements GlobalFilter, Ordered {
 					log.error("[JwtGatewayFilter] 잘못된 인자: {} (TraceID: {})", e.getMessage(), traceId);
 					return onAuthError(exchange, "토큰 인증 중 오류가 발생했습니다.", traceId);
 				});
+	}
+
+	private boolean isExpired(Claims claims) {
+		Date expiration = claims.getExpiration();
+		return expiration != null && expiration.before(new Date());
 	}
 
 	private Mono<Void> onAuthError(ServerWebExchange exchange, String message, String traceId) {
